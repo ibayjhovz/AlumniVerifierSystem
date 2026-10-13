@@ -1,0 +1,8 @@
+{
+  "name": "Remix VeriAlumni - University Alumni QR Verification \u0026 Certificate System",
+  "description": "Official, secure, mobile-first Alumni QR Verification \u0026 Digital Certificate System for university administrators and public verification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,133 @@
+{
+  "entities": {
+    "Alumni": {
+      "title": "Alumni",
+      "description": "Registered alumni record of Panpacific University",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "alumni_id": { "type": "string" },
+        "first_name": { "type": "string" },
+        "middle_name": { "type": "string" },
+        "last_name": { "type": "string" },
+        "suffix": { "type": "string" },
+        "photo_url": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "archived": { "type": "boolean" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "required": ["id", "alumni_id", "first_name", "last_name", "created_at", "updated_at"]
+    },
+    "AcademicRecord": {
+      "title": "AcademicRecord",
+      "description": "Academic degree and college records for an alumnus",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "alumni_id": { "type": "string" },
+        "degree_level": { "type": "string" },
+        "degree_program": { "type": "string" },
+        "college": { "type": "string" },
+        "major": { "type": "string" },
+        "graduation_year": { "type": "number" },
+        "campus": { "type": "string" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "required": ["id", "alumni_id", "degree_level", "degree_program", "college", "campus", "graduation_year"]
+    },
+    "AlumniCard": {
+      "title": "AlumniCard",
+      "description": "Official Alumni ID Card membership record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "alumni_id": { "type": "string" },
+        "card_number": { "type": "string" },
+        "issue_date": { "type": "string" },
+        "expiration_date": { "type": "string" },
+        "status": { "type": "string", "enum": ["ACTIVE", "EXPIRED", "REVOKED"] },
+        "revocation_reason": { "type": "string" },
+        "created_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "required": ["id", "alumni_id", "card_number", "issue_date", "expiration_date", "status"]
+    },
+    "AlumniQRCode": {
+      "title": "AlumniQRCode",
+      "description": "Cryptographic QR code assigned to an alumni card",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "card_id": { "type": "string" },
+        "qr_value": { "type": "string" },
+        "qr_image_url": { "type": "string" },
+        "status": { "type": "string", "enum": ["ACTIVE", "DISABLED"] },
+        "uploaded_at": { "type": "string" },
+        "updated_at": { "type": "string" }
+      },
+      "required": ["id", "card_id", "qr_value", "status"]
+    },
+    "VerificationLog": {
+      "title": "VerificationLog",
+      "description": "Audit log of all public QR and ID verification scans",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "qr_id": { "type": "string" },
+        "card_id": { "type": "string" },
+        "alumni_id": { "type": "string" },
+        "verification_reference": { "type": "string" },
+        "result": { "type": "string" },
+        "verified_at": { "type": "string" },
+        "ip_address": { "type": "string" },
+        "user_agent": { "type": "string" },
+        "searched_token": { "type": "string" }
+      },
+      "required": ["id", "verification_reference", "result", "verified_at"]
+    },
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "Administrative actions audit log",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "admin_id": { "type": "string" },
+        "action": { "type": "string" },
+        "target_type": { "type": "string" },
+        "target_id": { "type": "string" },
+        "metadata": { "type": "object" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["id", "admin_id", "action", "target_type", "target_id", "created_at"]
+    }
+  },
+  "firestore": {
+    "/alumni/{alumniId}": {
+      "schema": { "$ref": "Alumni" },
+      "description": "Alumni profiles"
+    },
+    "/academic_records/{recordId}": {
+      "schema": { "$ref": "AcademicRecord" },
+      "description": "Academic degrees and programs"
+    },
+    "/cards/{cardId}": {
+      "schema": { "$ref": "AlumniCard" },
+      "description": "Issued alumni cards"
+    },
+    "/qr_codes/{qrId}": {
+      "schema": { "$ref": "AlumniQRCode" },
+      "description": "QR code verification tokens"
+    },
+    "/verification_logs/{logId}": {
+      "schema": { "$ref": "VerificationLog" },
+      "description": "Audit logs for verification attempts"
+    },
+    "/activity_logs/{logId}": {
+      "schema": { "$ref": "ActivityLog" },
+      "description": "Administrative audit trail logs"
+    }
+  }
+}

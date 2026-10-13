@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper function for ID format
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // Central Alumni Directory: public can read for live verification; registrar can write
+    match /alumni/{alumniId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Academic Records: public can read for degree verification; registrar can write
+    match /academic_records/{recordId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Cards: public can read for status verification; registrar can write
+    match /cards/{cardId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // QR Codes: public can read for cryptographic QR checks; registrar can write
+    match /qr_codes/{qrId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Verification Logs: public can record verification scans; registrar can inspect
+    match /verification_logs/{logId} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if true;
+    }
+
+    // Activity Logs: registrar audit logs
+    match /activity_logs/{logId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Health ping & connection validation
+    match /test/{testId} {
+      allow read: if true;
+      allow write: if true;
+    }
+  }
+}

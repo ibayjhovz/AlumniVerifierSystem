@@ -1,0 +1,714 @@
+import {
+  Alumni,
+  AcademicRecord,
+  AlumniCard,
+  AlumniQRCode,
+  VerificationLog,
+  ActivityLog,
+  AdminStats,
+  PublicVerificationResponse,
+  CardStatus,
+  QRStatus,
+  VerificationStatusResult
+} from '../types/alumni.js';
+import { INITIAL_SEED_DATA, SeedDataSchema } from './seedData.js';
+
+const STORAGE_KEY = 'verialumni_local_db_v1';
+
+class ClientDatabaseStore {
+  private getDb(): SeedDataSchema {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.warn('Error reading local database store:', e);
+    }
+    this.saveDb(INITIAL_SEED_DATA);
+    return JSON.parse(JSON.stringify(INITIAL_SEED_DATA));
+  }
+
+  private saveDb(data: SeedDataSchema): void {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (e) {
+      console.warn('Error saving local database store:', e);
+    }
+  }
+
+  public verifyLiveToken(rawToken: string): PublicVerificationResponse {
+    const db = this.getDb();
+    const token = (rawToken || '').trim();
+    const now = new Date();
+    const refCode = 'VER-' + new Date().getFullYear() + '-' + Math.random().toString(36).substring(2, 8).toUpperCase();
+
+    const searchVal = token.toUpperCase().trim();
+    const cleanSearchAlpha = searchVal.replace(/[^A-Z0-9]/g, '');
+    const cleanSearchNoPrefix = searchVal.replace(/^(PU|AC)-?/, '');
+
+    // 1. Find QR record
+    let qrRecord = db.qr_codes.find(
+      q => q.qr_value.toUpperCase() === searchVal ||
+           q.qr_value.toUpperCase().replace(/[^A-Z0-9]/g, '') === cleanSearchAlpha
+    );
+
+    let card: AlumniCard | undefined;
+    let alumnus: Alumni | undefined;
+
+    if (qrRecord) {
+      const qrCardId = qrRecord.card_id;
+      card = db.cards.find(c => c.id === qrCardId);
+      if (card) {
+        const cardAlumniId = card.alumni_id;
+        alumnus = db.alumni.find(a => a.alumni_id === cardAlumniId && !a.archived);
+      }
+    } else {
+      // 2. Check if search token is an Alumni ID (e.g. PU-2024-00123)
+      alumnus = db.alumni.find(a => {
+        if (a.archived) return false;
+        const aid = a.alumni_id.toUpperCase();
+        const aidAlpha = aid.replace(/[^A-Z0-9]/g, '');
+        const aidNoPrefix = aid.replace(/^PU-?/, '');
+        return (
+          aid === searchVal ||
+          aidAlpha === cleanSearchAlpha ||
+          aidNoPrefix === cleanSearchNoPrefix
+        );
+      });
+
+      if (alumnus) {
+        const alumnusId = alumnus.alumni_id;
+        card = db.cards.find(c => c.alumni_id === alumnusId && c.status === 'ACTIVE') ||
+               db.cards.find(c => c.alumni_id === alumnusId);
+        if (card) {
+          const cardId = card.id;
+          qrRecord = db.qr_codes.find(q => q.card_id === cardId);
+        }
+      } else {
+        // 3. Check if search token is a Card Number (e.g. AC-2024-00123)
+        card = db.cards.find(c => {
+          const cNum = c.card_number.toUpperCase();
+          const cNumAlpha = cNum.replace(/[^A-Z0-9]/g, '');
+          const cNumNoPrefix = cNum.replace(/^AC-?/, '');
+          return (
+            cNum === searchVal ||
+            cNumAlpha === cleanSearchAlpha ||
+            cNumNoPrefix === cleanSearchNoPrefix
+          );
+        });
+        if (card) {
+          const cardAlumniId = card.alumni_id;
+          const cardId = card.id;
+          alumnus = db.alumni.find(a => a.alumni_id === cardAlumniId && !a.archived);
+          qrRecord = db.qr_codes.find(q => q.card_id === cardId);
+        }
+      }
+    }
+
+    if (!alumnus && !card && !qrRecord) {
+      const notFoundLog: VerificationLog = {
+        id: 'vlog-' + Date.now(),
+        qr_id: null,
+        card_id: null,
+        alumni_id: null,
+        verification_reference: refCode,
+        result: 'NOT_FOUND',
+        verified_at: now.toISOString(),
+        ip_address: 'client-offline',
+        user_agent: navigator.userAgent,
+        searched_token: token
+      };
+      db.verification_logs.unshift(notFoundLog);
+      this.saveDb(db);
+
+      return {
+        result: 'NOT_FOUND',
+        verification_reference: refCode,
+        verified_at: now.toISOString(),
+        message: `No alumni record, membership card, or QR token matching "${token}" was found in the official Panpacific University database.`
+      };
+    }
+
+    if (!card && alumnus) {
+      card = {
+        id: 'card-' + Date.now(),
+        alumni_id: alumnus.alumni_id,
+        card_number: 'AC-' + alumnus.alumni_id.replace(/^PU-/, ''),
+        issue_date: alumnus.created_at.slice(0, 10),
+        expiration_date: '2031-12-31',
+        status: 'ACTIVE',
+        created_at: alumnus.created_at,
+        updated_at: alumnus.updated_at
+      };
+    }
+
+    if (!alumnus && card) {
+      const cardAlumniId = card.alumni_id;
+      alumnus = db.alumni.find(a => a.alumni_id === cardAlumniId);
+    }
+
+    if (!alumnus || !card) {
+      return {
+        result: 'NOT_FOUND',
+        verification_reference: refCode,
+        verified_at: now.toISOString(),
+        message: 'Record incomplete or not found in registry.'
+      };
+    }
+
+    if (!qrRecord) {
+      qrRecord = {
+        id: 'qr-' + card.id,
+        card_id: card.id,
+        qr_value: 'PU-ALUMNI-' + alumnus.alumni_id,
+        status: 'ACTIVE',
+        uploaded_at: alumnus.created_at,
+        updated_at: alumnus.updated_at
+      };
+    }
+
+    const academicRecords = db.academic_records.filter(ar => ar.alumni_id === alumnus.alumni_id);
+
+    let resultStatus: VerificationStatusResult = 'VERIFIED';
+    let effectiveCardStatus: CardStatus = card.status;
+    let statusMessage = 'Authentic Panpacific University Alumni Credential';
+
+    if (qrRecord.status === 'DISABLED') {
+      resultStatus = 'DISABLED';
+      statusMessage = 'This QR credential has been disabled by the university administration.';
+    } else if (card.status === 'REVOKED') {
+      resultStatus = 'REVOKED';
+      effectiveCardStatus = 'REVOKED';
+      statusMessage = card.revocation_reason || 'This alumni card has been revoked by university authorities.';
+    } else if (card.status === 'EXPIRED' || new Date(card.expiration_date) < now) {
+      resultStatus = 'EXPIRED';
+      effectiveCardStatus = 'EXPIRED';
+      statusMessage = 'Card validity period has lapsed. Alumnus remains a graduate in good standing.';
+    }
+
+    // Log the verification
+    const log: VerificationLog = {
+      id: 'vlog-' + Date.now(),
+      qr_id: qrRecord.id,
+      card_id: card.id,
+      alumni_id: alumnus.alumni_id,
+      verification_reference: refCode,
+      result: resultStatus,
+      verified_at: now.toISOString(),
+      ip_address: 'client-offline',
+      user_agent: navigator.userAgent,
+      searched_token: token
+    };
+    db.verification_logs.unshift(log);
+    this.saveDb(db);
+
+    const fullName = [alumnus.first_name, alumnus.middle_name, alumnus.last_name, alumnus.suffix]
+      .filter(Boolean)
+      .join(' ');
+
+    const primaryCampus = academicRecords[0]?.campus || 'Panpacific University';
+
+    return {
+      result: resultStatus,
+      verification_reference: refCode,
+      verified_at: now.toISOString(),
+      message: statusMessage,
+      alumni: {
+        alumni_id: alumnus.alumni_id,
+        full_name: fullName,
+        first_name: alumnus.first_name,
+        middle_name: alumnus.middle_name,
+        last_name: alumnus.last_name,
+        suffix: alumnus.suffix,
+        photo_url: alumnus.photo_url,
+        academic_records: academicRecords.map(ar => ({
+          degree_level: ar.degree_level,
+          degree_program: ar.degree_program,
+          college: ar.college,
+          major: ar.major,
+          graduation_year: ar.graduation_year,
+          campus: ar.campus
+        })),
+        card: {
+          card_number: card.card_number,
+          issue_date: card.issue_date,
+          expiration_date: card.expiration_date,
+          status: card.status,
+          effective_status: effectiveCardStatus
+        },
+        qr_status: qrRecord.status,
+        primary_campus: primaryCampus
+      }
+    };
+  }
+
+  public getStats(): AdminStats {
+    const db = this.getDb();
+    const now = new Date();
+    const todayStr = now.toISOString().slice(0, 10);
+
+    const totalAlumni = db.alumni.filter(a => !a.archived).length;
+    const activeCards = db.cards.filter(c => c.status === 'ACTIVE' && new Date(c.expiration_date) >= now).length;
+    const expiredCards = db.cards.filter(c => c.status === 'EXPIRED' || new Date(c.expiration_date) < now).length;
+    const revokedCards = db.cards.filter(c => c.status === 'REVOKED').length;
+    const registeredQRs = db.qr_codes.length;
+    const totalVerifications = db.verification_logs.length;
+    const todayVerifications = db.verification_logs.filter(v => v.verified_at.startsWith(todayStr)).length;
+    const notFoundAttempts = db.verification_logs.filter(v => v.result === 'NOT_FOUND').length;
+
+    return {
+      total_alumni: totalAlumni,
+      active_cards: activeCards,
+      expired_cards: expiredCards,
+      revoked_cards: revokedCards,
+      registered_qr_codes: registeredQRs,
+      total_verifications: totalVerifications,
+      today_verifications: todayVerifications,
+      not_found_attempts: notFoundAttempts
+    };
+  }
+
+  public getAlumniList(params: {
+    query?: string;
+    program?: string;
+    degree_level?: string;
+    graduation_year?: string;
+    campus?: string;
+    card_status?: string;
+    qr_status?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const db = this.getDb();
+    let records = db.alumni.filter(a => !a.archived);
+
+    if (params.query) {
+      const q = params.query.toLowerCase();
+      records = records.filter(a =>
+        a.alumni_id.toLowerCase().includes(q) ||
+        a.first_name.toLowerCase().includes(q) ||
+        a.last_name.toLowerCase().includes(q) ||
+        (a.email ? a.email.toLowerCase().includes(q) : false)
+      );
+    }
+
+    const populated = records.map(alumnus => {
+      const academic = db.academic_records.filter(ar => ar.alumni_id === alumnus.alumni_id);
+      const card = db.cards.find(c => c.alumni_id === alumnus.alumni_id);
+      const qr = card ? db.qr_codes.find(q => q.card_id === card.id) : undefined;
+      return {
+        ...alumnus,
+        academic_records: academic,
+        active_card: card,
+        active_qr: qr
+      };
+    });
+
+    const page = params.page || 1;
+    const limit = params.limit || 10;
+    const start = (page - 1) * limit;
+    const pageItems = populated.slice(start, start + limit);
+
+    return {
+      items: pageItems,
+      data: pageItems,
+      total: populated.length,
+      page,
+      limit,
+      totalPages: Math.ceil(populated.length / limit) || 1,
+      pagination: {
+        total: populated.length,
+        page,
+        limit,
+        totalPages: Math.ceil(populated.length / limit) || 1
+      }
+    };
+  }
+
+  public getAlumniById(id: string) {
+    const db = this.getDb();
+    const alumnus = db.alumni.find(a =>
+      a.id === id ||
+      a.alumni_id === id ||
+      a.alumni_id.toUpperCase() === id.toUpperCase()
+    );
+    if (!alumnus) return null;
+
+    const academic_records = db.academic_records.filter(ar => ar.alumni_id === alumnus.alumni_id);
+    const cards = db.cards.filter(c => c.alumni_id === alumnus.alumni_id);
+    const cardIds = cards.map(c => c.id);
+    const qr_codes = db.qr_codes.filter(q => cardIds.includes(q.card_id));
+    const verification_logs = db.verification_logs.filter(v => v.alumni_id === alumnus.alumni_id);
+    const activity_logs = (db.activity_logs || []).filter(al => al.target_id === alumnus.alumni_id || cardIds.includes(al.target_id));
+    const active_card = cards.find(c => c.status === 'ACTIVE') || cards[0];
+    const active_qr = active_card ? qr_codes.find(q => q.card_id === active_card.id) : qr_codes[0];
+
+    return {
+      alumnus,
+      academic_records,
+      cards,
+      qr_codes,
+      verification_logs,
+      activity_logs,
+      ...alumnus,
+      active_card,
+      active_qr,
+      verification_history: verification_logs
+    };
+  }
+
+  public checkUnique(type: 'alumni_id' | 'card_number' | 'qr_value', value: string, currentId?: string): boolean {
+    const db = this.getDb();
+    const v = value.trim().toUpperCase();
+
+    if (type === 'alumni_id') {
+      return !db.alumni.some(a => a.alumni_id.toUpperCase() === v && a.id !== currentId);
+    } else if (type === 'card_number') {
+      return !db.cards.some(c => c.card_number.toUpperCase() === v && c.id !== currentId);
+    } else if (type === 'qr_value') {
+      return !db.qr_codes.some(q => q.qr_value.toUpperCase() === v && q.id !== currentId);
+    }
+    return true;
+  }
+
+  public createAlumni(payload: any) {
+    const db = this.getDb();
+    const now = new Date().toISOString();
+    const almId = 'alm-' + Date.now();
+
+    const newAlumnus: Alumni = {
+      id: almId,
+      alumni_id: payload.alumni_id,
+      first_name: payload.first_name,
+      middle_name: payload.middle_name || '',
+      last_name: payload.last_name,
+      suffix: payload.suffix || '',
+      photo_url: payload.photo_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
+      email: payload.email,
+      phone: payload.phone || '',
+      archived: false,
+      created_at: now,
+      updated_at: now
+    };
+    db.alumni.unshift(newAlumnus);
+
+    // Academic records
+    if (payload.academic_records && Array.isArray(payload.academic_records)) {
+      payload.academic_records.forEach((ar: any, idx: number) => {
+        db.academic_records.push({
+          id: `acad-${Date.now()}-${idx}`,
+          alumni_id: newAlumnus.alumni_id,
+          degree_level: ar.degree_level,
+          degree_program: ar.degree_program,
+          college: ar.college,
+          major: ar.major || '',
+          graduation_year: parseInt(ar.graduation_year, 10),
+          campus: ar.campus,
+          created_at: now,
+          updated_at: now
+        });
+      });
+    }
+
+    // Card & QR
+    const cardId = 'card-' + Date.now();
+    const cardNumber = payload.card?.card_number || payload.card_number || `AC-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
+    const issueDate = payload.card?.issue_date || payload.issue_date || now.slice(0, 10);
+    const expDate = payload.card?.expiration_date || payload.expiration_date || new Date(Date.now() + 5 * 365 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const cardStatus = payload.card?.status || payload.status || 'ACTIVE';
+
+    const newCard: AlumniCard = {
+      id: cardId,
+      alumni_id: newAlumnus.alumni_id,
+      card_number: cardNumber,
+      issue_date: issueDate,
+      expiration_date: expDate,
+      status: cardStatus,
+      created_at: now,
+      updated_at: now
+    };
+    db.cards.unshift(newCard);
+
+    const qrId = 'qr-' + Date.now();
+    const qrValue = payload.qr?.qr_value || payload.qr_value || `PU-ALUMNI-${new Date().getFullYear()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const qrStatus = payload.qr?.status || payload.qr_status || 'ACTIVE';
+    const qrImageUrl = payload.qr?.qr_image_url || payload.qr_image_url || '';
+
+    const newQR: AlumniQRCode = {
+      id: qrId,
+      card_id: cardId,
+      qr_value: qrValue,
+      qr_image_url: qrImageUrl,
+      status: qrStatus,
+      uploaded_at: now,
+      updated_at: now
+    };
+    db.qr_codes.unshift(newQR);
+
+    this.saveDb(db);
+    const detail = this.getAlumniById(almId);
+
+    return {
+      alumnus: newAlumnus,
+      alumni_id: newAlumnus.alumni_id,
+      detail,
+      card: newCard,
+      qr: newQR
+    };
+  }
+
+  public updateCardStatus(cardId: string, status: CardStatus, notes?: string) {
+    const db = this.getDb();
+    const card = db.cards.find(c => c.id === cardId);
+    if (!card) throw new Error('Card not found');
+
+    card.status = status;
+    card.updated_at = new Date().toISOString();
+    if (status === 'REVOKED') {
+      card.revocation_reason = notes || 'Revoked by administration';
+      const qr = db.qr_codes.find(q => q.card_id === card.id);
+      if (qr) {
+        qr.status = 'DISABLED';
+        qr.updated_at = new Date().toISOString();
+      }
+    }
+    this.saveDb(db);
+    return card;
+  }
+
+  public renewCard(cardId: string, newExpDate: string, notes?: string) {
+    const db = this.getDb();
+    const card = db.cards.find(c => c.id === cardId);
+    if (!card) throw new Error('Card not found');
+
+    card.status = 'ACTIVE';
+    card.expiration_date = newExpDate;
+    card.updated_at = new Date().toISOString();
+
+    const qr = db.qr_codes.find(q => q.card_id === card.id);
+    if (qr) {
+      qr.status = 'ACTIVE';
+      qr.updated_at = new Date().toISOString();
+    }
+
+    this.saveDb(db);
+    return card;
+  }
+
+  public updateQRStatus(qrId: string, status: QRStatus) {
+    const db = this.getDb();
+    const qr = db.qr_codes.find(q => q.id === qrId);
+    if (!qr) throw new Error('QR record not found');
+
+    qr.status = status;
+    qr.updated_at = new Date().toISOString();
+    this.saveDb(db);
+    return qr;
+  }
+
+  public getCards(params?: any) {
+    const db = this.getDb();
+    const now = new Date();
+    return db.cards.map(c => {
+      const alumnus = db.alumni.find(a => a.alumni_id === c.alumni_id);
+      const qr = db.qr_codes.find(q => q.card_id === c.id);
+      const expDate = new Date(c.expiration_date + 'T23:59:59Z');
+      let effectiveStatus: CardStatus = c.status;
+      if (c.status === 'REVOKED') {
+        effectiveStatus = 'REVOKED';
+      } else if (c.status === 'EXPIRED' || now > expDate) {
+        effectiveStatus = 'EXPIRED';
+      }
+      return {
+        ...c,
+        effective_status: effectiveStatus,
+        alumni_name: alumnus ? `${alumnus.first_name} ${alumnus.last_name}` : 'Unknown',
+        qr_value: qr?.qr_value || 'None',
+        qr_status: qr?.status || 'None',
+        alumnus,
+        qr
+      };
+    });
+  }
+
+  public getQRCodes(params?: any) {
+    const db = this.getDb();
+    return db.qr_codes.map(q => {
+      const card = db.cards.find(c => c.id === q.card_id);
+      const alumnus = card ? db.alumni.find(a => a.alumni_id === card.alumni_id) : undefined;
+      return {
+        ...q,
+        card_number: card?.card_number || 'N/A',
+        alumni_name: alumnus ? `${alumnus.first_name} ${alumnus.last_name}` : 'Unknown',
+        alumni_id: card?.alumni_id || 'N/A',
+        card_status: card?.status || 'UNKNOWN',
+        card,
+        alumnus
+      };
+    });
+  }
+
+  public getVerificationLogs(params?: any) {
+    const db = this.getDb();
+    const query = (params?.query || '').toLowerCase();
+    const result = params?.result || '';
+    let logs = [...db.verification_logs];
+    if (query) {
+      logs = logs.filter(l =>
+        (l.verification_reference || '').toLowerCase().includes(query) ||
+        (l.searched_token || '').toLowerCase().includes(query) ||
+        (l.alumni_id && l.alumni_id.toLowerCase().includes(query)) ||
+        (l.ip_address || '').toLowerCase().includes(query)
+      );
+    }
+    if (result) {
+      logs = logs.filter(l => l.result === result);
+    }
+    const enriched = logs.map(v => {
+      const alumnus = v.alumni_id ? db.alumni.find(a => a.alumni_id === v.alumni_id) : undefined;
+      const card = v.card_id ? db.cards.find(c => c.id === v.card_id) : undefined;
+      return {
+        ...v,
+        alumni_name: alumnus ? `${alumnus.first_name} ${alumnus.last_name}` : 'N/A',
+        card_number: card ? card.card_number : 'N/A'
+      };
+    });
+    const page = params?.page || 1;
+    const limit = params?.limit || 15;
+    const startIndex = (page - 1) * limit;
+    const paginated = enriched.slice(startIndex, startIndex + limit);
+    return {
+      items: paginated,
+      data: paginated,
+      total: enriched.length,
+      page,
+      limit,
+      totalPages: Math.ceil(enriched.length / limit) || 1,
+      pagination: {
+        total: enriched.length,
+        page,
+        limit,
+        totalPages: Math.ceil(enriched.length / limit) || 1
+      }
+    };
+  }
+
+  public getActivityLogs(params?: any) {
+    const db = this.getDb();
+    const query = (params?.query || '').toLowerCase();
+    const action = params?.action || '';
+    let logs = [...(db.activity_logs || [])];
+    if (query) {
+      logs = logs.filter(l =>
+        (l.action || '').toLowerCase().includes(query) ||
+        (l.admin_id || '').toLowerCase().includes(query) ||
+        (l.target_id || '').toLowerCase().includes(query)
+      );
+    }
+    if (action) {
+      logs = logs.filter(l => l.action === action);
+    }
+    const page = params?.page || 1;
+    const limit = params?.limit || 20;
+    const startIndex = (page - 1) * limit;
+    const paginated = logs.slice(startIndex, startIndex + limit);
+    return {
+      items: paginated,
+      data: paginated,
+      total: logs.length,
+      page,
+      limit,
+      totalPages: Math.ceil(logs.length / limit) || 1,
+      pagination: {
+        total: logs.length,
+        page,
+        limit,
+        totalPages: Math.ceil(logs.length / limit) || 1
+      }
+    };
+  }
+
+  public logActivity(admin_id: string, action: string, target_type: 'ALUMNI' | 'CARD' | 'QR' | 'ACADEMIC_RECORD' | 'AUTH', target_id: string, metadata?: Record<string, any>) {
+    const db = this.getDb();
+    const log: ActivityLog = {
+      id: 'act-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
+      admin_id,
+      action,
+      target_type,
+      target_id,
+      metadata,
+      created_at: new Date().toISOString()
+    };
+    if (!db.activity_logs) db.activity_logs = [];
+    db.activity_logs.unshift(log);
+    this.saveDb(db);
+    return log;
+  }
+
+  public getRawStore(): SeedDataSchema {
+    return this.getDb();
+  }
+
+  public syncFromServer(serverData: {
+    alumni?: Alumni[];
+    academic_records?: AcademicRecord[];
+    cards?: AlumniCard[];
+    qr_codes?: AlumniQRCode[];
+  }) {
+    const db = this.getDb();
+    let updated = false;
+
+    if (Array.isArray(serverData.alumni)) {
+      for (const a of serverData.alumni) {
+        if (!a || !a.alumni_id) continue;
+        const exists = db.alumni.some(ex => ex.alumni_id.toUpperCase() === a.alumni_id.toUpperCase());
+        if (!exists) {
+          db.alumni.unshift(a);
+          updated = true;
+        }
+      }
+    }
+
+    if (Array.isArray(serverData.academic_records)) {
+      for (const ar of serverData.academic_records) {
+        if (!ar || !ar.alumni_id) continue;
+        const exists = db.academic_records.some(
+          ex => ex.alumni_id === ar.alumni_id && ex.degree_program === ar.degree_program
+        );
+        if (!exists) {
+          db.academic_records.push(ar);
+          updated = true;
+        }
+      }
+    }
+
+    if (Array.isArray(serverData.cards)) {
+      for (const c of serverData.cards) {
+        if (!c || !c.card_number) continue;
+        const exists = db.cards.some(ex => ex.card_number.toUpperCase() === c.card_number.toUpperCase());
+        if (!exists) {
+          db.cards.unshift(c);
+          updated = true;
+        }
+      }
+    }
+
+    if (Array.isArray(serverData.qr_codes)) {
+      for (const q of serverData.qr_codes) {
+        if (!q || !q.qr_value) continue;
+        const exists = db.qr_codes.some(ex => ex.qr_value.toUpperCase() === q.qr_value.toUpperCase());
+        if (!exists) {
+          db.qr_codes.unshift(q);
+          updated = true;
+        }
+      }
+    }
+
+    if (updated) {
+      this.saveDb(db);
+    }
+  }
+}
+
+export const clientStore = new ClientDatabaseStore();
