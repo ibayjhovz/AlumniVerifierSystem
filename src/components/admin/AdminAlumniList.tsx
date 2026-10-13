@@ -93,13 +93,26 @@ export const AdminAlumniList: React.FC<AdminAlumniListProps> = ({
         throw new Error('Camera access is not supported by your browser.');
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: mode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: mode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+        });
+      } catch (e1) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: mode }
+          });
+        } catch (e2) {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true
+          });
         }
-      });
+      }
 
       streamRef.current = stream;
       if (videoRef.current) {
@@ -114,11 +127,7 @@ export const AdminAlumniList: React.FC<AdminAlumniListProps> = ({
       console.warn('Camera error:', err);
       setIsCameraStarting(false);
       setIsCameraActive(false);
-      let msg = 'Unable to access camera. Please allow camera permissions.';
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        msg = 'Camera permission was denied in your browser.';
-      }
-      setCameraError(msg);
+      setCameraError('Camera access was not granted. Please allow camera permissions.');
     }
   };
 

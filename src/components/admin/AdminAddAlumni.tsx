@@ -103,6 +103,7 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
 
   const photoFileInputRef = useRef<HTMLInputElement>(null);
   const qrFileInputRef = useRef<HTMLInputElement>(null);
+  const qrCameraCaptureInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -135,13 +136,26 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
         throw new Error('Camera access is not supported by your browser.');
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: mode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: mode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+        });
+      } catch (e1) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: mode }
+          });
+        } catch (e2) {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true
+          });
         }
-      });
+      }
 
       streamRef.current = stream;
       if (videoRef.current) {
@@ -153,14 +167,19 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
       setIsCameraStarting(false);
       animationFrameIdRef.current = requestAnimationFrame(scanQRCodeLoop);
     } catch (err: any) {
-      console.warn('Camera error:', err);
+      console.warn('Camera stream error, falling back to camera capture:', err);
       setIsCameraStarting(false);
       setIsCameraActive(false);
-      let msg = 'Unable to access camera. Please allow camera permissions or upload an image.';
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        msg = 'Camera permission was denied. Please allow camera permissions or upload a QR image.';
-      }
-      setCameraError(msg);
+
+      // Auto-fallback: directly trigger native device camera capture
+      try {
+        if (qrCameraCaptureInputRef.current) {
+          qrCameraCaptureInputRef.current.click();
+          return;
+        }
+      } catch {}
+
+      setCameraError('Camera access was not granted. Tap "Open Camera" to scan.');
     }
   };
 
@@ -1341,24 +1360,36 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
                       </div>
                     </div>
                   ) : (
-                    <div className="space-y-3">
+                    <div className="space-y-4">
+                      {/* Hidden native camera capture input */}
+                      <input
+                        type="file"
+                        ref={qrCameraCaptureInputRef}
+                        onChange={handleQRUpload}
+                        accept="image/*"
+                        capture="environment"
+                        className="hidden"
+                        id="admin-qr-camera-capture"
+                      />
+
                       {cameraError && (
-                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
-                          <p className="font-semibold flex items-center gap-1.5 text-amber-800">
-                            <AlertCircle className="w-4 h-4 text-amber-600" />
-                            Camera Notice
-                          </p>
-                          <p className="text-[11px] leading-relaxed text-amber-700">
-                            {cameraError}
-                          </p>
+                        <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span>{cameraError}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => qrCameraCaptureInputRef.current?.click()}
+                            className="px-3 py-1.5 bg-amber-800 hover:bg-amber-900 text-white rounded-lg font-bold text-xs shrink-0 cursor-pointer"
+                          >
+                            Open Camera
+                          </button>
                         </div>
                       )}
 
-                      <div
-                        onClick={() => startCamera(facingMode)}
-                        className="group flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-slate-800 bg-slate-50/70 hover:bg-slate-50 rounded-2xl p-6 sm:p-8 transition-all cursor-pointer text-center space-y-3"
-                      >
-                        <div className="p-3.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full shadow-xs group-hover:scale-105 transition-transform">
+                      <div className="border-2 border-dashed border-slate-300 bg-slate-50/70 rounded-2xl p-6 sm:p-8 text-center space-y-3">
+                        <div className="p-3.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full shadow-xs inline-flex">
                           {isCameraStarting ? (
                             <Loader2 className="w-7 h-7 text-emerald-800 animate-spin" />
                           ) : (
@@ -1367,19 +1398,31 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
                         </div>
                         <div className="space-y-1">
                           <span className="text-sm font-bold text-slate-900 block">
-                            {isCameraStarting ? 'Starting Camera...' : 'Scan Physical Card QR Code'}
+                            {isCameraStarting ? 'Activating Camera...' : 'Scan Physical Card QR Code'}
                           </span>
                           <span className="text-xs text-slate-600 max-w-sm block mx-auto leading-relaxed">
                             Use your device camera to scan and decode the QR code directly from the alumni card.
                           </span>
                         </div>
-                        <button
-                          type="button"
-                          disabled={isCameraStarting}
-                          className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold tracking-wide transition-colors shadow-xs pointer-events-none"
-                        >
-                          {isCameraStarting ? 'Initializing...' : 'Open Camera Scanner'}
-                        </button>
+                        <div className="flex flex-col sm:flex-row items-center justify-center gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => startCamera(facingMode)}
+                            disabled={isCameraStarting}
+                            className="w-full sm:w-auto px-4 py-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-lg text-xs font-bold tracking-wide transition-colors shadow-xs flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            <Camera className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>{isCameraStarting ? 'Activating Camera...' : 'Activate Camera'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => qrCameraCaptureInputRef.current?.click()}
+                            className="w-full sm:w-auto px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold tracking-wide transition-colors shadow-xs flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            <Camera className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Open Device Camera</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}

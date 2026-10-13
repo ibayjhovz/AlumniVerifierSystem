@@ -37,6 +37,7 @@ export const PublicVerificationPortal: React.FC<PublicVerificationPortalProps> =
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraCaptureInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -76,13 +77,28 @@ export const PublicVerificationPortal: React.FC<PublicVerificationPortalProps> =
         throw new Error('Camera access is not supported by your browser.');
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: mode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: mode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+        });
+      } catch (e1) {
+        // Fallback 1: basic facingMode
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: mode }
+          });
+        } catch (e2) {
+          // Fallback 2: generic video
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: true
+          });
         }
-      });
+      }
 
       streamRef.current = stream;
       if (videoRef.current) {
@@ -94,16 +110,19 @@ export const PublicVerificationPortal: React.FC<PublicVerificationPortalProps> =
       setIsCameraStarting(false);
       animationFrameIdRef.current = requestAnimationFrame(scanQRCodeLoop);
     } catch (err: any) {
-      console.warn('Camera error:', err);
+      console.warn('Camera stream error, falling back to camera capture:', err);
       setIsCameraStarting(false);
       setIsCameraActive(false);
-      let msg = 'Unable to access device camera. Please allow camera permissions or upload a QR image.';
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        msg = 'Camera permission was denied. Please allow camera access in your browser or upload a QR photo.';
-      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-        msg = 'No camera device was detected. Please use the Upload QR Image option.';
-      }
-      setCameraError(msg);
+
+      // Auto-fallback: directly trigger native device camera capture
+      try {
+        if (cameraCaptureInputRef.current) {
+          cameraCaptureInputRef.current.click();
+          return;
+        }
+      } catch {}
+
+      setCameraError('Camera access was not granted. Tap "Open Camera" to scan.');
     }
   };
 
@@ -287,9 +306,6 @@ export const PublicVerificationPortal: React.FC<PublicVerificationPortalProps> =
                     setActiveTab('scan');
                     setErrorMessage(null);
                     setCameraError(null);
-                    if (!isCameraActive && !isCameraStarting) {
-                      startCamera(facingMode);
-                    }
                   }}
                   className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                     activeTab === 'scan'
@@ -386,45 +402,81 @@ export const PublicVerificationPortal: React.FC<PublicVerificationPortalProps> =
                       </div>
                     </div>
                   ) : (
-                    <div className="space-y-3">
+                    <div className="space-y-4">
+                      {/* Hidden native camera capture input (bypasses browser permission popups) */}
+                      <input
+                        type="file"
+                        ref={cameraCaptureInputRef}
+                        onChange={handleFileUpload}
+                        accept="image/*"
+                        capture="environment"
+                        className="hidden"
+                        id="qr-camera-capture-input"
+                      />
+
                       {cameraError && (
-                        <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
-                          <p className="font-semibold flex items-center gap-1.5 text-amber-800">
-                            <AlertCircle className="w-4 h-4 text-amber-600" />
-                            Camera Access Notice
-                          </p>
-                          <p className="text-[11px] leading-relaxed text-amber-700">
-                            {cameraError}
-                          </p>
+                        <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span>{cameraError}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => cameraCaptureInputRef.current?.click()}
+                            className="px-3 py-1.5 bg-amber-800 hover:bg-amber-900 text-white rounded-lg font-bold text-xs shrink-0 cursor-pointer"
+                          >
+                            Open Camera
+                          </button>
                         </div>
                       )}
 
-                      <div
-                        onClick={() => startCamera(facingMode)}
-                        className="group flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-slate-800 bg-slate-50/70 hover:bg-slate-50 rounded-2xl p-6 sm:p-8 transition-all cursor-pointer text-center space-y-3"
-                      >
-                        <div className="p-3.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full shadow-xs group-hover:scale-105 transition-transform">
+                      <div className="border-2 border-dashed border-slate-300 bg-slate-50/70 rounded-2xl p-6 sm:p-8 text-center space-y-4">
+                        <div className="p-3.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full shadow-xs inline-flex">
                           {isCameraStarting ? (
                             <Loader2 className="w-7 h-7 text-emerald-800 animate-spin" />
                           ) : (
                             <Camera className="w-7 h-7" />
                           )}
                         </div>
-                        <div className="space-y-1">
+
+                        <div className="space-y-1 max-w-sm mx-auto">
                           <span className="text-sm font-bold text-slate-900 block">
-                            {isCameraStarting ? 'Initializing Camera Scanner...' : 'Scan Alumni Card with Camera'}
+                            {isCameraStarting ? 'Activating Camera Scanner...' : 'Scan Alumni Card QR Code'}
                           </span>
-                          <span className="text-xs text-slate-600 max-w-sm block mx-auto leading-relaxed">
-                            Open your device camera to instantly scan the QR code printed on the physical alumni card.
+                          <span className="text-xs text-slate-600 block leading-relaxed">
+                            Use your device camera to scan the official QR code on the physical alumni card.
                           </span>
                         </div>
-                        <button
-                          type="button"
-                          disabled={isCameraStarting}
-                          className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold tracking-wide transition-colors shadow-xs pointer-events-none"
-                        >
-                          {isCameraStarting ? 'Starting Camera...' : 'Open Camera Scanner'}
-                        </button>
+
+                        <div className="flex flex-col sm:flex-row items-center justify-center gap-2.5 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => startCamera(facingMode)}
+                            disabled={isCameraStarting}
+                            className="w-full sm:w-auto px-5 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold tracking-wide transition-colors shadow-xs flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            {isCameraStarting ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                                <span>Activating Camera...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Camera className="w-3.5 h-3.5 text-emerald-400" />
+                                <span>Activate Camera</span>
+                              </>
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => cameraCaptureInputRef.current?.click()}
+                            className="w-full sm:w-auto px-4 py-2.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-xl text-xs font-semibold tracking-wide transition-colors shadow-xs flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            <Camera className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Open Device Camera</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
