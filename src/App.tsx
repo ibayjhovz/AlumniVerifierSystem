@@ -10,6 +10,7 @@ import { AdminCardManager } from './components/admin/AdminCardManager.js';
 import { AdminQRManager } from './components/admin/AdminQRManager.js';
 import { AdminVerificationLogs } from './components/admin/AdminVerificationLogs.js';
 import { AdminActivityLogs } from './components/admin/AdminActivityLogs.js';
+import { AdminSettings } from './components/admin/AdminSettings.js';
 import { api } from './services/api.js';
 
 export function App() {
@@ -166,6 +167,7 @@ export function App() {
         }}
         onLogout={handleAdminLogout}
         user={adminUser}
+        onUpdateUser={(updated) => setAdminUser(updated)}
       >
         {adminTab === 'dashboard' && (
           <AdminDashboard
@@ -231,6 +233,13 @@ export function App() {
         {adminTab === 'verification-logs' && <AdminVerificationLogs />}
 
         {adminTab === 'activity-logs' && <AdminActivityLogs />}
+
+        {adminTab === 'settings' && (
+          <AdminSettings
+            user={adminUser}
+            onUpdateUser={(updated) => setAdminUser(updated)}
+          />
+        )}
       </AdminLayout>
     );
   }

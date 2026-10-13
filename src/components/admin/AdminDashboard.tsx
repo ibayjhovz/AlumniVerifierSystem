@@ -17,7 +17,8 @@ import {
   RefreshCw,
   Clock,
   ShieldCheck,
-  History as HistoryIcon
+  History as HistoryIcon,
+  KeyRound
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -193,6 +194,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
           >
             <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
             <span>Refresh</span>
+          </button>
+
+          <button
+            onClick={() => onNavigate('settings')}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition-colors cursor-pointer"
+            title="Update Administrator Login Email & Password"
+          >
+            <KeyRound className="w-3.5 h-3.5 text-amber-700" />
+            <span>Change Credentials</span>
           </button>
 
           <button

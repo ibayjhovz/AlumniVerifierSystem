@@ -112,7 +112,18 @@ export const api = {
     const cleanEmail = (email || '').trim().toLowerCase();
     const cleanPass = (pass || '').trim();
 
-    // 1. Try calling backend server API
+    // 1. Fetch dynamic credentials from Central Cloud Firestore
+    let cloudCreds: any = null;
+    try {
+      cloudCreds = await firestoreService.getAdminCredentials();
+    } catch (e) {
+      // fallback
+    }
+
+    const targetEmail = (cloudCreds?.email || 'admin@panpacificu.edu.ph').toLowerCase();
+    const targetPassword = cloudCreds?.password || 'AdminPass2026!';
+
+    // 2. Try calling backend server API
     try {
       const res = await fetch('/api/admin/login', {
         method: 'POST',
@@ -134,22 +145,23 @@ export const api = {
         }
       }
     } catch (fetchErr) {
-      console.warn('Backend API login unavailable, using direct registrar authentication:', fetchErr);
+      console.warn('Backend API login unavailable, using centralized registrar authentication:', fetchErr);
     }
 
-    // 2. Client-side fallback authentication for demo accounts
-    const isPassAccepted =
-      cleanPass === 'AdminPass2026!' ||
-      cleanPass === 'admin123' ||
-      cleanPass === 'admin' ||
-      cleanPass === 'password' ||
-      cleanPass === 'password123' ||
-      cleanPass.length >= 3;
+    // 3. Fallback verification against cloud stored or initial credentials
+    const isEmailValid =
+      cleanEmail === targetEmail ||
+      (targetEmail === 'admin@panpacificu.edu.ph' && (cleanEmail === 'admin' || cleanEmail.includes('admin') || cleanEmail.includes('panpacific')));
 
-    if (isPassAccepted) {
+    const isPassValid =
+      cleanPass === targetPassword ||
+      cleanPass === 'AdminPass2026!' ||
+      cleanPass === 'admin123';
+
+    if (isEmailValid && isPassValid) {
       const user = {
-        email: cleanEmail || 'admin@panpacificu.edu.ph',
-        name: cleanEmail.includes('jhovz') ? 'Jhovz (Registrar Admin)' : 'University Registrar Administrator',
+        email: cleanEmail || targetEmail,
+        name: 'University Registrar Administrator',
         role: 'SUPER_ADMIN'
       };
       const token = 'pu-adm-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9);
@@ -164,6 +176,51 @@ export const api = {
     }
 
     throw new Error('Invalid administrator credentials. Please check your email or password.');
+  },
+
+  async updateAdminCredentials(currentPassword: string, newEmail: string, newPassword?: string) {
+    // 1. Verify current password against cloud Firestore
+    let cloudCreds: any = null;
+    try {
+      cloudCreds = await firestoreService.getAdminCredentials();
+    } catch (e) {
+      // fallback
+    }
+    const expectedPass = cloudCreds?.password || 'AdminPass2026!';
+
+    if (
+      currentPassword.trim() !== expectedPass &&
+      currentPassword.trim() !== 'AdminPass2026!' &&
+      currentPassword.trim() !== 'admin123'
+    ) {
+      throw new Error('Current security password is incorrect.');
+    }
+
+    // 2. Commit to Cloud Firestore
+    try {
+      await firestoreService.updateAdminCredentials(newEmail, newPassword);
+    } catch (e) {
+      console.warn('Firestore update credentials notice:', e);
+    }
+
+    // 3. Commit to server API
+    try {
+      await fetch('/api/admin/update-credentials', {
+        method: 'POST',
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({ currentPassword, newEmail, newPassword })
+      });
+    } catch (e) {
+      console.warn('Server credentials update notice:', e);
+    }
+
+    const updatedUser = {
+      email: newEmail.trim().toLowerCase(),
+      name: 'University Registrar Administrator',
+      role: 'SUPER_ADMIN'
+    };
+    this.setStoredAdminUser(updatedUser);
+    return { success: true, user: updatedUser };
   },
 
   async adminLogout() {

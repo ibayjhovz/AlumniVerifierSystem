@@ -1,4 +1,5 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import jsQR from 'jsqr';
 import { api } from '../../services/api.js';
 import { decodeQRCodeFromImage, extractVerificationToken } from '../../utils/qrDecoder.js';
 import QRCodeLib from 'qrcode';
@@ -8,6 +9,9 @@ import {
   CreditCard,
   QrCode,
   Upload,
+  Camera,
+  SwitchCamera,
+  X,
   AlertCircle,
   CheckCircle2,
   Loader2,
@@ -83,6 +87,7 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
   const [cardStatus, setCardStatus] = useState<'ACTIVE' | 'EXPIRED' | 'REVOKED'>('ACTIVE');
 
   // Section 4: QR Code
+  const [qrMode, setQrMode] = useState<'camera' | 'upload' | 'generate'>('camera');
   const [qrValue, setQrValue] = useState('');
   const [qrImageUrl, setQrImageUrl] = useState('');
   const [qrStatus, setQrStatus] = useState<'ACTIVE' | 'DISABLED'>('ACTIVE');
@@ -90,8 +95,158 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
   const [qrError, setQrError] = useState<string | null>(null);
   const [qrSuccessMsg, setQrSuccessMsg] = useState<string | null>(null);
 
+  // Live Camera Scanner State
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isCameraStarting, setIsCameraStarting] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+
   const photoFileInputRef = useRef<HTMLInputElement>(null);
   const qrFileInputRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const animationFrameIdRef = useRef<number | null>(null);
+
+  const stopCamera = () => {
+    if (animationFrameIdRef.current) {
+      cancelAnimationFrame(animationFrameIdRef.current);
+      animationFrameIdRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsCameraActive(false);
+    setIsCameraStarting(false);
+  };
+
+  const startCamera = async (mode: 'environment' | 'user' = facingMode) => {
+    stopCamera();
+    setCameraError(null);
+    setQrError(null);
+    setIsCameraStarting(true);
+
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Camera access is not supported by your browser.');
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: mode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      });
+
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute('playsinline', 'true');
+        await videoRef.current.play();
+      }
+      setIsCameraActive(true);
+      setIsCameraStarting(false);
+      animationFrameIdRef.current = requestAnimationFrame(scanQRCodeLoop);
+    } catch (err: any) {
+      console.warn('Camera error:', err);
+      setIsCameraStarting(false);
+      setIsCameraActive(false);
+      let msg = 'Unable to access camera. Please allow camera permissions or upload an image.';
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        msg = 'Camera permission was denied. Please allow camera permissions or upload a QR image.';
+      }
+      setCameraError(msg);
+    }
+  };
+
+  const toggleFacingMode = () => {
+    const nextMode = facingMode === 'environment' ? 'user' : 'environment';
+    setFacingMode(nextMode);
+    startCamera(nextMode);
+  };
+
+  const scanQRCodeLoop = () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    if (!video || !canvas) {
+      animationFrameIdRef.current = requestAnimationFrame(scanQRCodeLoop);
+      return;
+    }
+
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (ctx) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'attemptBoth'
+        });
+
+        if (code && code.data && code.data.trim()) {
+          const rawScanned = code.data.trim();
+          try {
+            if (navigator.vibrate) navigator.vibrate(100);
+          } catch {}
+          stopCamera();
+          handleScannedQRToken(rawScanned);
+          return;
+        }
+      }
+    }
+
+    animationFrameIdRef.current = requestAnimationFrame(scanQRCodeLoop);
+  };
+
+  const handleScannedQRToken = async (rawCode: string) => {
+    const token = extractVerificationToken(rawCode);
+    if (!token) {
+      setQrError('Scanned QR code is not a valid format.');
+      return;
+    }
+
+    setQrDecoding(true);
+    setQrError(null);
+    setQrSuccessMsg(null);
+
+    try {
+      const isUnique = await api.checkUnique('qr_value', token);
+      if (!isUnique) {
+        setQrError('⚠ QR CODE ALREADY REGISTERED: This QR code is already associated with another alumni card.');
+        setQrValue('');
+        setQrImageUrl('');
+        return;
+      }
+
+      const previewDataUrl = await QRCodeLib.toDataURL(token, {
+        width: 300,
+        margin: 2,
+        color: { dark: '#0F172A', light: '#FFFFFF' }
+      });
+
+      setQrValue(token);
+      setQrImageUrl(previewDataUrl);
+      setQrSuccessMsg('Physical card QR code scanned and linked successfully!');
+    } catch (err: any) {
+      setQrError(err.message || 'Failed to process scanned QR code.');
+    } finally {
+      setQrDecoding(false);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
 
   // Validate Alumni ID uniqueness
   const handleAlumniIdBlur = async () => {
@@ -1051,67 +1206,255 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
 
         {/* SECTION 4: QR CODE UPLOAD & DECODING (Sections 24-27) */}
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-6">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div className="flex items-center gap-2">
               <QrCode className="w-5 h-5 text-slate-800" />
-              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">
-                4. QR Code & Cryptographic Token
-              </h2>
+              <div>
+                <h2 className="text-sm font-bold uppercase tracking-wider text-slate-900">
+                  4. QR Code & Cryptographic Token
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  Scan physical card QR code with camera, upload photo, or generate new token
+                </p>
+              </div>
             </div>
-            <button
-              type="button"
-              onClick={handleGenerateOfficialQR}
-              disabled={qrDecoding}
-              className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-lg text-xs font-semibold cursor-pointer"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-              <span>Generate Official QR</span>
-            </button>
+
+            {/* Mode Selector Tabs */}
+            <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl border border-slate-200">
+              <button
+                type="button"
+                onClick={() => {
+                  setQrMode('camera');
+                  setQrError(null);
+                  if (!isCameraActive && !isCameraStarting) {
+                    startCamera(facingMode);
+                  }
+                }}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  qrMode === 'camera'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Camera className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Scan with Camera</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  stopCamera();
+                  setQrMode('upload');
+                  setQrError(null);
+                }}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  qrMode === 'upload'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Upload className="w-3.5 h-3.5 text-blue-600" />
+                <span>Upload QR</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  stopCamera();
+                  setQrMode('generate');
+                  handleGenerateOfficialQR();
+                }}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  qrMode === 'generate'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+                <span>Generate QR</span>
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Upload QR Image Box */}
+            {/* Left Box: Active Mode (Camera Scanner / Upload Box) */}
             <div className="space-y-3">
-              <label className="block text-xs font-semibold text-slate-700">
-                Upload Existing Physical QR Image
-              </label>
+              {/* Option 1: Live Camera Scanner */}
+              {qrMode === 'camera' && (
+                <div className="space-y-3">
+                  {isCameraActive ? (
+                    <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-md">
+                      <video
+                        ref={videoRef}
+                        playsInline
+                        autoPlay
+                        muted
+                        className="w-full h-64 object-cover"
+                      />
 
-              <input
-                type="file"
-                ref={qrFileInputRef}
-                onChange={handleQRUpload}
-                accept="image/png, image/jpeg, image/jpg, image/webp"
-                className="hidden"
-                id="qr-upload-input"
-              />
+                      {/* Viewfinder Target Frame */}
+                      <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-4">
+                        <div className="relative w-48 h-48 rounded-2xl border-2 border-emerald-400/40 shadow-2xl overflow-hidden flex items-center justify-center">
+                          <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-emerald-400 rounded-tl-lg" />
+                          <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-emerald-400 rounded-tr-lg" />
+                          <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-emerald-400 rounded-bl-lg" />
+                          <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-emerald-400 rounded-br-lg" />
+                          <div className="animate-scan-line bg-gradient-to-r from-transparent via-emerald-400 to-transparent h-0.5 w-full absolute shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
+                          <span className="text-[10px] text-emerald-200/90 font-mono tracking-wider uppercase bg-black/50 px-2 py-0.5 rounded backdrop-blur-xs">
+                            Point at Alumni QR
+                          </span>
+                        </div>
+                      </div>
 
-              <label
-                htmlFor="qr-upload-input"
-                className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-slate-800 bg-slate-50/70 hover:bg-slate-50 rounded-xl p-6 transition-all cursor-pointer text-center"
-              >
-                {qrDecoding ? (
-                  <div className="space-y-2 py-4">
-                    <Loader2 className="w-8 h-8 text-slate-800 animate-spin mx-auto" />
-                    <span className="text-xs font-semibold text-slate-700">
-                      Scanning & Decoding QR Image...
-                    </span>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="p-3 bg-white rounded-full shadow-xs border border-slate-200 inline-block">
-                      <Upload className="w-6 h-6 text-slate-700" />
+                      {/* Camera Controls */}
+                      <div className="absolute top-3 inset-x-3 flex items-center justify-between pointer-events-auto">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-full text-[11px] font-semibold text-emerald-300 border border-emerald-500/30">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                          Camera Scanner Active
+                        </span>
+
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={toggleFacingMode}
+                            className="p-1.5 bg-black/60 hover:bg-black/80 backdrop-blur-md text-white rounded-lg border border-white/20 transition-colors cursor-pointer"
+                            title="Flip camera"
+                          >
+                            <SwitchCamera className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={stopCamera}
+                            className="p-1.5 bg-black/60 hover:bg-black/80 backdrop-blur-md text-white rounded-lg border border-white/20 transition-colors cursor-pointer"
+                            title="Close camera"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Bottom Guidance */}
+                      <div className="absolute bottom-3 inset-x-3 text-center pointer-events-none">
+                        <p className="inline-block text-[11px] text-white/95 bg-black/60 backdrop-blur-md px-3 py-1 rounded-full font-medium shadow-xs">
+                          Align physical card QR inside box to capture automatically
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-xs font-bold text-slate-900 block">
-                        Select QR Code Photo / Image
-                      </span>
-                      <span className="text-[11px] text-slate-600">
-                        Browser engine will detect and decode QR token
-                      </span>
+                  ) : (
+                    <div className="space-y-3">
+                      {cameraError && (
+                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 space-y-1">
+                          <p className="font-semibold flex items-center gap-1.5 text-amber-800">
+                            <AlertCircle className="w-4 h-4 text-amber-600" />
+                            Camera Notice
+                          </p>
+                          <p className="text-[11px] leading-relaxed text-amber-700">
+                            {cameraError}
+                          </p>
+                        </div>
+                      )}
+
+                      <div
+                        onClick={() => startCamera(facingMode)}
+                        className="group flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-slate-800 bg-slate-50/70 hover:bg-slate-50 rounded-2xl p-6 sm:p-8 transition-all cursor-pointer text-center space-y-3"
+                      >
+                        <div className="p-3.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full shadow-xs group-hover:scale-105 transition-transform">
+                          {isCameraStarting ? (
+                            <Loader2 className="w-7 h-7 text-emerald-800 animate-spin" />
+                          ) : (
+                            <Camera className="w-7 h-7" />
+                          )}
+                        </div>
+                        <div className="space-y-1">
+                          <span className="text-sm font-bold text-slate-900 block">
+                            {isCameraStarting ? 'Starting Camera...' : 'Scan Physical Card QR Code'}
+                          </span>
+                          <span className="text-xs text-slate-600 max-w-sm block mx-auto leading-relaxed">
+                            Use your device camera to scan and decode the QR code directly from the alumni card.
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={isCameraStarting}
+                          className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold tracking-wide transition-colors shadow-xs pointer-events-none"
+                        >
+                          {isCameraStarting ? 'Initializing...' : 'Open Camera Scanner'}
+                        </button>
+                      </div>
                     </div>
+                  )}
+                </div>
+              )}
+
+              {/* Option 2: Upload QR Image File */}
+              {qrMode === 'upload' && (
+                <div className="space-y-3">
+                  <input
+                    type="file"
+                    ref={qrFileInputRef}
+                    onChange={handleQRUpload}
+                    accept="image/png, image/jpeg, image/jpg, image/webp"
+                    className="hidden"
+                    id="qr-upload-input"
+                  />
+
+                  <label
+                    htmlFor="qr-upload-input"
+                    className="flex flex-col items-center justify-center border-2 border-dashed border-slate-300 hover:border-slate-800 bg-slate-50/70 hover:bg-slate-50 rounded-2xl p-6 sm:p-8 transition-all cursor-pointer text-center"
+                  >
+                    {qrDecoding ? (
+                      <div className="space-y-2 py-4">
+                        <Loader2 className="w-8 h-8 text-slate-800 animate-spin mx-auto" />
+                        <span className="text-xs font-semibold text-slate-700">
+                          Scanning & Decoding QR Image...
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="p-3 bg-white rounded-full shadow-xs border border-slate-200 inline-block">
+                          <Upload className="w-6 h-6 text-slate-700" />
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold text-slate-900 block">
+                            Select QR Code Photo / Image
+                          </span>
+                          <span className="text-[11px] text-slate-600">
+                            Upload PNG or JPG image of alumni card QR code
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </label>
+                </div>
+              )}
+
+              {/* Option 3: Generate QR Token Info */}
+              {qrMode === 'generate' && (
+                <div className="p-6 bg-amber-50/60 border border-amber-200 rounded-2xl space-y-3 text-center">
+                  <div className="p-3 bg-white rounded-full shadow-xs border border-amber-200 inline-block text-amber-700">
+                    <Sparkles className="w-6 h-6" />
                   </div>
-                )}
-              </label>
+                  <div className="space-y-1">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-amber-900">
+                      Official Cryptographic Token Generated
+                    </h3>
+                    <p className="text-xs text-amber-800/90 leading-relaxed max-w-sm mx-auto">
+                      A unique token has been cryptographically minted for this record.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleGenerateOfficialQR}
+                    disabled={qrDecoding}
+                    className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                  >
+                    Regenerate Token
+                  </button>
+                </div>
+              )}
+
+              {/* Hidden canvas for video processing */}
+              <canvas ref={canvasRef} className="hidden" />
 
               {/* Status alerts */}
               {qrError && (

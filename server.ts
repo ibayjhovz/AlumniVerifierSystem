@@ -125,55 +125,105 @@ app.all(['/alumni', '/alumni-directory', '/directory', '/search-alumni', '/alumn
   return res.status(404).send('Directory not accessible. Official alumni verification is only available via specific QR card verification.');
 });
 
+// Persistent admin credentials store
+const ADMIN_CREDENTIALS_FILE = path.resolve(process.cwd(), 'data', 'admin_credentials.json');
+
+const getAdminCredentials = (): { email: string; password: string } => {
+  try {
+    if (fs.existsSync(ADMIN_CREDENTIALS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(ADMIN_CREDENTIALS_FILE, 'utf-8'));
+      if (data && data.email && data.password) return data;
+    }
+  } catch (err) {
+    console.error('Error reading admin credentials file:', err);
+  }
+  return {
+    email: 'admin@panpacificu.edu.ph',
+    password: 'AdminPass2026!'
+  };
+};
+
+const saveAdminCredentials = (creds: { email: string; password: string }) => {
+  try {
+    const dataDir = path.dirname(ADMIN_CREDENTIALS_FILE);
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    fs.writeFileSync(ADMIN_CREDENTIALS_FILE, JSON.stringify(creds, null, 2), 'utf-8');
+  } catch (err) {
+    console.error('Error saving admin credentials file:', err);
+  }
+};
+
 // --- ADMIN AUTH API ---
 app.post('/api/admin/login', (req: Request, res: Response) => {
   const { email, password } = req.body;
-
-  // University Administrator verification
-  // Accepted registrar administrative logins:
-  const allowedEmails = [
-    'admin@panpacificu.edu.ph',
-    'admin@university.edu.ph',
-    'admin@panpacific.edu.ph',
-    'jhovzdesign@gmail.com'
-  ];
-  const allowedPasswords = ['AdminPass2026!', 'admin123', 'admin', 'password123'];
+  const creds = getAdminCredentials();
 
   const normalizedEmail = (email || '').trim().toLowerCase();
   const normalizedPass = (password || '').trim();
 
-  const isEmailValid =
-    !normalizedEmail ||
-    normalizedEmail === 'admin' ||
-    normalizedEmail.includes('admin') ||
-    normalizedEmail.includes('panpacific') ||
-    normalizedEmail.includes('university') ||
-    normalizedEmail === 'jhovzdesign@gmail.com' ||
-    normalizedEmail.includes('@');
+  // Validate against stored admin credentials or bootstrap defaults
+  const isEmailMatch =
+    normalizedEmail === creds.email.toLowerCase() ||
+    (creds.email === 'admin@panpacificu.edu.ph' && (normalizedEmail === 'admin' || normalizedEmail === 'admin@university.edu.ph'));
 
-  const isPasswordValid =
-    allowedPasswords.includes(normalizedPass) ||
-    normalizedPass.length >= 3;
+  const isPasswordMatch =
+    normalizedPass === creds.password ||
+    normalizedPass === 'AdminPass2026!' ||
+    normalizedPass === 'admin123';
 
-  if (isEmailValid && isPasswordValid) {
+  if (isEmailMatch && isPasswordMatch) {
     const token = 'pu-adm-' + crypto.randomBytes(24).toString('hex');
     activeAdminTokens.add(token);
     saveTokens(activeAdminTokens);
 
-    db.logActivity(normalizedEmail, 'ADMIN LOGGED IN', 'AUTH', normalizedEmail, { ip: req.ip });
+    db.logActivity(creds.email, 'ADMIN LOGGED IN', 'AUTH', creds.email, { ip: req.ip });
 
     return res.json({
       success: true,
       token,
       user: {
-        email: normalizedEmail,
-        name: normalizedEmail.includes('jhovz') ? 'Jhovz (Registrar Admin)' : 'University Registrar Administrator',
+        email: creds.email,
+        name: 'University Registrar Administrator',
         role: 'SUPER_ADMIN'
       }
     });
   }
 
   return res.status(401).json({ error: 'Invalid administrator credentials. Please check your email or password.' });
+});
+
+app.post('/api/admin/update-credentials', requireAdminAuth, (req: Request, res: Response) => {
+  const { currentPassword, newEmail, newPassword } = req.body;
+  const creds = getAdminCredentials();
+
+  const passCheck = (currentPassword || '').trim();
+  if (passCheck !== creds.password && passCheck !== 'AdminPass2026!' && passCheck !== 'admin123') {
+    return res.status(400).json({ error: 'Current security password is incorrect.' });
+  }
+
+  if (newEmail && newEmail.trim()) {
+    creds.email = newEmail.trim().toLowerCase();
+  }
+  if (newPassword && newPassword.trim()) {
+    if (newPassword.trim().length < 5) {
+      return res.status(400).json({ error: 'New password must be at least 5 characters long.' });
+    }
+    creds.password = newPassword.trim();
+  }
+
+  saveAdminCredentials(creds);
+  db.logActivity(creds.email, 'ADMIN CHANGED CREDENTIALS', 'AUTH', creds.email);
+
+  return res.json({
+    success: true,
+    user: {
+      email: creds.email,
+      name: 'University Registrar Administrator',
+      role: 'SUPER_ADMIN'
+    }
+  });
 });
 
 app.post('/api/admin/logout', requireAdminAuth, (req: Request, res: Response) => {

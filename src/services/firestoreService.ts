@@ -1201,6 +1201,44 @@ export class FirestoreDatabaseService {
     }
     return true;
   }
+
+  // --- ADMIN CREDENTIALS CONFIGURATION ---
+  public async getAdminCredentials(): Promise<{ email: string; password?: string } | null> {
+    try {
+      const snap = await getDoc(doc(firestore, 'admin_settings', 'credentials'));
+      if (snap.exists()) {
+        return snap.data() as any;
+      }
+    } catch (e) {
+      console.warn('Error reading admin credentials from Firestore:', e);
+    }
+    return null;
+  }
+
+  public async updateAdminCredentials(newEmail: string, newPassword?: string): Promise<boolean> {
+    const credRef = doc(firestore, 'admin_settings', 'credentials');
+    const updatePayload: any = {
+      email: newEmail.trim().toLowerCase(),
+      updated_at: new Date().toISOString()
+    };
+    if (newPassword && newPassword.trim()) {
+      updatePayload.password = newPassword.trim();
+    }
+    await setDoc(credRef, updatePayload, { merge: true });
+
+    // Log in central audit trail
+    const log: ActivityLog = {
+      id: 'act-' + Date.now(),
+      admin_id: newEmail.trim().toLowerCase(),
+      action: 'ADMIN UPDATED LOGIN CREDENTIALS',
+      target_type: 'AUTH',
+      target_id: 'CREDENTIALS',
+      metadata: { email: newEmail.trim().toLowerCase() },
+      created_at: new Date().toISOString()
+    };
+    setDoc(doc(firestore, 'activity_logs', log.id), log).catch(() => {});
+    return true;
+  }
 }
 
 export const firestoreService = new FirestoreDatabaseService();

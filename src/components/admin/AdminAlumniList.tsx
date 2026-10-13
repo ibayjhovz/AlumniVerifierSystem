@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import jsQR from 'jsqr';
 import { api } from '../../services/api.js';
 import { Alumni, CardStatus, QRStatus } from '../../types/alumni.js';
+import { extractVerificationToken } from '../../utils/qrDecoder.js';
 import {
   Search,
   Filter,
@@ -14,7 +16,11 @@ import {
   Loader2,
   RefreshCw,
   UserCheck,
-  GraduationCap
+  GraduationCap,
+  Camera,
+  SwitchCamera,
+  X,
+  AlertCircle
 } from 'lucide-react';
 
 interface AdminAlumniListProps {
@@ -46,6 +52,146 @@ export const AdminAlumniList: React.FC<AdminAlumniListProps> = ({
   // Confirmation Modal for Archiving
   const [archivingId, setArchivingId] = useState<string | null>(null);
   const [archiveLoading, setArchiveLoading] = useState(false);
+
+  // Quick QR Camera Scanner Modal
+  const [showScanModal, setShowScanModal] = useState(false);
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isCameraStarting, setIsCameraStarting] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [scannedFeedback, setScannedFeedback] = useState<string | null>(null);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const animationFrameIdRef = useRef<number | null>(null);
+
+  const stopCamera = () => {
+    if (animationFrameIdRef.current) {
+      cancelAnimationFrame(animationFrameIdRef.current);
+      animationFrameIdRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsCameraActive(false);
+    setIsCameraStarting(false);
+  };
+
+  const startCamera = async (mode: 'environment' | 'user' = facingMode) => {
+    stopCamera();
+    setCameraError(null);
+    setScannedFeedback(null);
+    setIsCameraStarting(true);
+
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Camera access is not supported by your browser.');
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: mode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      });
+
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute('playsinline', 'true');
+        await videoRef.current.play();
+      }
+      setIsCameraActive(true);
+      setIsCameraStarting(false);
+      animationFrameIdRef.current = requestAnimationFrame(scanQRCodeLoop);
+    } catch (err: any) {
+      console.warn('Camera error:', err);
+      setIsCameraStarting(false);
+      setIsCameraActive(false);
+      let msg = 'Unable to access camera. Please allow camera permissions.';
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        msg = 'Camera permission was denied in your browser.';
+      }
+      setCameraError(msg);
+    }
+  };
+
+  const toggleFacingMode = () => {
+    const nextMode = facingMode === 'environment' ? 'user' : 'environment';
+    setFacingMode(nextMode);
+    startCamera(nextMode);
+  };
+
+  const scanQRCodeLoop = () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+
+    if (!video || !canvas) {
+      animationFrameIdRef.current = requestAnimationFrame(scanQRCodeLoop);
+      return;
+    }
+
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (ctx) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'attemptBoth'
+        });
+
+        if (code && code.data && code.data.trim()) {
+          const rawScanned = code.data.trim();
+          try {
+            if (navigator.vibrate) navigator.vibrate(100);
+          } catch {}
+          stopCamera();
+          handleScannedCard(rawScanned);
+          return;
+        }
+      }
+    }
+
+    animationFrameIdRef.current = requestAnimationFrame(scanQRCodeLoop);
+  };
+
+  const handleScannedCard = async (rawCode: string) => {
+    const token = extractVerificationToken(rawCode);
+    setScannedFeedback(`Scanned token: ${token}`);
+
+    try {
+      // Find alumni matching token
+      const res = await api.getAlumniList({ query: token, limit: 1 });
+      const found = res?.items?.[0];
+      if (found) {
+        setShowScanModal(false);
+        onSelectAlumnus(found.alumni_id);
+      } else {
+        setSearch(token);
+        setShowScanModal(false);
+        setPage(1);
+      }
+    } catch {
+      setSearch(token);
+      setShowScanModal(false);
+      setPage(1);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
 
   const fetchAlumni = async () => {
     setLoading(true);
@@ -162,6 +308,19 @@ export const AdminAlumniList: React.FC<AdminAlumniListProps> = ({
             className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
           >
             Search
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setShowScanModal(true);
+              startCamera(facingMode);
+            }}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold rounded-lg transition-colors shadow-xs cursor-pointer"
+            title="Scan physical card QR code"
+          >
+            <Camera className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Scan QR Code</span>
+            <span className="sm:hidden">Scan</span>
           </button>
           <button
             type="button"
@@ -482,6 +641,124 @@ export const AdminAlumniList: React.FC<AdminAlumniListProps> = ({
           </div>
         </div>
       )}
+
+      {/* Quick QR Scanner Modal */}
+      {showScanModal && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-emerald-50 rounded-lg text-emerald-800 border border-emerald-200">
+                  <Camera className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Scan Alumni Card QR Code
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Point camera at card to look up alumnus instantly
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  stopCamera();
+                  setShowScanModal(false);
+                }}
+                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {cameraError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800">
+                {cameraError}
+              </div>
+            )}
+
+            {isCameraActive ? (
+              <div className="relative rounded-xl overflow-hidden bg-slate-950 border border-slate-800">
+                <video
+                  ref={videoRef}
+                  playsInline
+                  autoPlay
+                  muted
+                  className="w-full h-64 object-cover"
+                />
+
+                <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-4">
+                  <div className="relative w-48 h-48 rounded-xl border-2 border-emerald-400/50 shadow-2xl overflow-hidden">
+                    <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-emerald-400 rounded-tl-md" />
+                    <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-emerald-400 rounded-tr-md" />
+                    <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-emerald-400 rounded-bl-md" />
+                    <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-emerald-400 rounded-br-md" />
+                    <div className="animate-scan-line bg-gradient-to-r from-transparent via-emerald-400 to-transparent h-0.5 w-full absolute" />
+                  </div>
+                </div>
+
+                <div className="absolute top-3 right-3">
+                  <button
+                    type="button"
+                    onClick={toggleFacingMode}
+                    className="p-1.5 bg-black/60 hover:bg-black/80 text-white rounded-lg border border-white/20 cursor-pointer"
+                    title="Flip Camera"
+                  >
+                    <SwitchCamera className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="absolute bottom-2 inset-x-2 text-center pointer-events-none">
+                  <span className="text-[10px] text-white/90 bg-black/60 px-2 py-0.5 rounded-full font-mono">
+                    Targeting Alumni Card QR...
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="p-8 text-center space-y-3 bg-slate-50 border border-slate-200 rounded-xl">
+                {isCameraStarting ? (
+                  <Loader2 className="w-8 h-8 text-slate-800 animate-spin mx-auto" />
+                ) : (
+                  <Camera className="w-8 h-8 text-slate-400 mx-auto" />
+                )}
+                <p className="text-xs text-slate-600">
+                  {isCameraStarting ? 'Initializing camera...' : 'Camera is currently stopped.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => startCamera(facingMode)}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg cursor-pointer"
+                >
+                  Start Camera
+                </button>
+              </div>
+            )}
+
+            {scannedFeedback && (
+              <p className="text-xs text-emerald-700 font-semibold text-center">
+                {scannedFeedback}
+              </p>
+            )}
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  stopCamera();
+                  setShowScanModal(false);
+                }}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden canvas for video processing */}
+      <canvas ref={canvasRef} className="hidden" />
     </div>
   );
 };

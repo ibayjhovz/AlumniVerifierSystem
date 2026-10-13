@@ -1,14 +1,22 @@
 import React, { useState } from 'react';
 import { api } from '../../services/api.js';
-import { Lock, Mail, KeyRound, AlertCircle, Loader2, ShieldCheck, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import {
+  Lock,
+  Mail,
+  KeyRound,
+  AlertCircle,
+  Loader2,
+  ShieldCheck,
+  ArrowLeft
+} from 'lucide-react';
 
 interface AdminLoginProps {
   onLoginSuccess: (user: any) => void;
 }
 
 export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess }) => {
-  const [email, setEmail] = useState('admin@panpacificu.edu.ph');
-  const [password, setPassword] = useState('AdminPass2026!');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,12 +35,6 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess }) => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleQuickFill = (demoEmail: string, demoPass: string) => {
-    setEmail(demoEmail);
-    setPassword(demoPass);
-    setError(null);
   };
 
   return (
@@ -65,27 +67,6 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess }) => {
           </div>
         </div>
 
-        {/* Demo Credentials Helper Box */}
-        <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-2 text-xs">
-          <div className="flex items-center justify-between">
-            <span className="font-bold text-emerald-900 flex items-center gap-1.5">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              <span>Authorized Registrar Credentials</span>
-            </span>
-            <button
-              type="button"
-              onClick={() => handleQuickFill('admin@panpacificu.edu.ph', 'AdminPass2026!')}
-              className="text-[10px] font-bold uppercase tracking-wider bg-emerald-700 hover:bg-emerald-800 text-white px-2 py-0.5 rounded cursor-pointer transition-colors"
-            >
-              Autofill
-            </button>
-          </div>
-          <div className="space-y-0.5 text-[11px] text-emerald-950 font-mono bg-white/70 p-2 rounded border border-emerald-100">
-            <div><strong className="font-semibold text-slate-700">Email:</strong> admin@panpacificu.edu.ph</div>
-            <div><strong className="font-semibold text-slate-700">Password:</strong> AdminPass2026! <span className="text-slate-600 font-sans text-[10px]">(or admin123)</span></div>
-          </div>
-        </div>
-
         {error && (
           <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-xs text-red-800">
             <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
@@ -93,41 +74,57 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess }) => {
           </div>
         )}
 
-        {/* Credentials Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Credentials Form with strictly EMAIL and PASSWORD placeholders & autofill removed */}
+        <form onSubmit={handleSubmit} autoComplete="off" className="space-y-4">
+          {/* Hidden decoy fields to thwart browser autofill */}
+          <input
+            type="text"
+            style={{ display: 'none' }}
+            tabIndex={-1}
+            autoComplete="off"
+            aria-hidden="true"
+          />
+          <input
+            type="password"
+            style={{ display: 'none' }}
+            tabIndex={-1}
+            autoComplete="off"
+            aria-hidden="true"
+          />
+
           <div className="space-y-1">
-            <label className="block text-xs font-semibold text-slate-700">
-              Authorized Administrator Email
-            </label>
             <div className="relative">
-              <Mail className="w-4 h-4 text-slate-600 absolute left-3 top-3" />
+              <Mail className="w-4 h-4 text-slate-600 absolute left-3 top-3 pointer-events-none" />
               <input
                 type="email"
                 required
+                name="pu_admin_identifier_no_fill"
+                id="pu_admin_identifier"
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck="false"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@panpacificu.edu.ph"
-                className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 focus:border-slate-900 focus:bg-white rounded-lg text-sm text-slate-900 focus:outline-none transition-colors"
+                placeholder="EMAIL"
+                className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-300 focus:border-slate-900 focus:bg-white rounded-lg text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none transition-colors"
               />
             </div>
           </div>
 
           <div className="space-y-1">
-            <div className="flex justify-between items-center">
-              <label className="block text-xs font-semibold text-slate-700">
-                Security Password
-              </label>
-              <span className="text-[10px] text-slate-600">Encrypted Protocol</span>
-            </div>
             <div className="relative">
-              <KeyRound className="w-4 h-4 text-slate-600 absolute left-3 top-3" />
+              <KeyRound className="w-4 h-4 text-slate-600 absolute left-3 top-3 pointer-events-none" />
               <input
                 type="password"
                 required
+                name="pu_admin_secret_no_fill"
+                id="pu_admin_secret"
+                autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••••••"
-                className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 focus:border-slate-900 focus:bg-white rounded-lg text-sm text-slate-900 focus:outline-none transition-colors"
+                placeholder="PASSWORD"
+                className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-300 focus:border-slate-900 focus:bg-white rounded-lg text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none transition-colors"
               />
             </div>
           </div>
@@ -157,7 +154,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess }) => {
             <span>Authorized Personnel Notice</span>
           </div>
           <p>
-            Access is restricted to verified university registrar personnel. All login events and record modifications are cryptographically logged for audit integrity.
+            Access is restricted to verified university registrar personnel. Credentials can be managed from within the administrative portal after logging in.
           </p>
         </div>
       </div>
