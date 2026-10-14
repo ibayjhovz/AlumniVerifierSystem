@@ -15,12 +15,14 @@ import {
   AlertCircle,
   CheckCircle2,
   Loader2,
-  X
+  X,
+  Camera
 } from 'lucide-react';
 import { api } from '../../services/api.js';
 
 export type AdminTab =
   | 'dashboard'
+  | 'scan-verify'
   | 'alumni-list'
   | 'alumni-add'
   | 'alumni-detail'
@@ -58,6 +60,7 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({
 
   const navItems: { id: AdminTab; label: string; icon: React.ComponentType<any> }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'scan-verify', label: 'Verify Card Scanner', icon: Camera },
     { id: 'alumni-list', label: 'Alumni Directory', icon: Users },
     { id: 'alumni-add', label: 'Add Alumni', icon: UserPlus },
     { id: 'cards', label: 'Card Management', icon: CreditCard },

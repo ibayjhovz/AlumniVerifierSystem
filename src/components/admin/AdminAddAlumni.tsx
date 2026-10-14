@@ -1404,23 +1404,21 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
                             Use your device camera to scan and decode the QR code directly from the alumni card.
                           </span>
                         </div>
-                        <div className="flex flex-col sm:flex-row items-center justify-center gap-2 pt-1">
+                        <div className="pt-1">
                           <button
                             type="button"
-                            onClick={() => startCamera(facingMode)}
+                            onClick={() => {
+                              if (cameraError) {
+                                qrCameraCaptureInputRef.current?.click();
+                              } else {
+                                startCamera(facingMode);
+                              }
+                            }}
                             disabled={isCameraStarting}
-                            className="w-full sm:w-auto px-4 py-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-lg text-xs font-bold tracking-wide transition-colors shadow-xs flex items-center justify-center gap-2 cursor-pointer"
+                            className="w-full sm:w-auto px-5 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-lg text-xs font-bold tracking-wide transition-colors shadow-xs inline-flex items-center justify-center gap-2 cursor-pointer"
                           >
                             <Camera className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>{isCameraStarting ? 'Activating Camera...' : 'Activate Camera'}</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => qrCameraCaptureInputRef.current?.click()}
-                            className="w-full sm:w-auto px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold tracking-wide transition-colors shadow-xs flex items-center justify-center gap-2 cursor-pointer"
-                          >
-                            <Camera className="w-3.5 h-3.5 text-slate-500" />
-                            <span>Open Device Camera</span>
+                            <span>{isCameraStarting ? 'Opening Camera...' : 'Open Camera'}</span>
                           </button>
                         </div>
                       </div>

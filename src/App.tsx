@@ -178,6 +178,12 @@ export function App() {
           />
         )}
 
+        {adminTab === 'scan-verify' && (
+          <div className="max-w-2xl mx-auto py-2">
+            <PublicVerificationPortal embedded={true} />
+          </div>
+        )}
+
         {adminTab === 'alumni-list' && (
           <AdminAlumniList
             onSelectAlumnus={(id) => {
