@@ -21,7 +21,7 @@ export function App() {
   const [checkingSession, setCheckingSession] = useState(true);
 
   // Admin SPA state
-  const [adminTab, setAdminTab] = useState<AdminTab>('dashboard');
+  const [adminTab, setAdminTab] = useState<AdminTab>('scan-verify');
   const [selectedAlumniId, setSelectedAlumniId] = useState<string | null>(null);
   const [justAddedAlumniId, setJustAddedAlumniId] = useState<string | null>(null);
 
@@ -150,6 +150,7 @@ export function App() {
         <AdminLogin
           onLoginSuccess={(user) => {
             setAdminUser(user);
+            setAdminTab('scan-verify');
           }}
         />
       );

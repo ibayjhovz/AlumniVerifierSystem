@@ -16,9 +16,9 @@ import {
   Loader2,
   RefreshCw,
   Clock,
-  ShieldCheck,
   History as HistoryIcon,
-  KeyRound
+  KeyRound,
+  Camera
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -194,6 +194,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onNavigate }) =>
           >
             <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
             <span>Refresh</span>
+          </button>
+
+          <button
+            onClick={() => onNavigate('scan-verify')}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors cursor-pointer"
+            title="Open Centralized Device Camera Scanner"
+          >
+            <Camera className="w-3.5 h-3.5 text-emerald-700" />
+            <span>Centralized Device Camera</span>
           </button>
 
           <button

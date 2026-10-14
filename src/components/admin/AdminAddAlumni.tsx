@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import jsQR from 'jsqr';
 import { api } from '../../services/api.js';
 import { decodeQRCodeFromImage, extractVerificationToken } from '../../utils/qrDecoder.js';
 import QRCodeLib from 'qrcode';
+import { CentralizedDeviceCamera } from '../camera/CentralizedDeviceCamera.js';
+import { centralizedCamera } from '../../services/centralizedCamera.js';
 import {
   User,
   GraduationCap,
@@ -10,7 +11,6 @@ import {
   QrCode,
   Upload,
   Camera,
-  SwitchCamera,
   X,
   AlertCircle,
   CheckCircle2,
@@ -95,135 +95,15 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
   const [qrError, setQrError] = useState<string | null>(null);
   const [qrSuccessMsg, setQrSuccessMsg] = useState<string | null>(null);
 
-  // Live Camera Scanner State
-  const [isCameraActive, setIsCameraActive] = useState(false);
-  const [isCameraStarting, setIsCameraStarting] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
-  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
-
   const photoFileInputRef = useRef<HTMLInputElement>(null);
   const qrFileInputRef = useRef<HTMLInputElement>(null);
-  const qrCameraCaptureInputRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const animationFrameIdRef = useRef<number | null>(null);
 
-  const stopCamera = () => {
-    if (animationFrameIdRef.current) {
-      cancelAnimationFrame(animationFrameIdRef.current);
-      animationFrameIdRef.current = null;
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-    setIsCameraActive(false);
-    setIsCameraStarting(false);
-  };
-
-  const startCamera = async (mode: 'environment' | 'user' = facingMode) => {
-    stopCamera();
-    setCameraError(null);
-    setQrError(null);
-    setIsCameraStarting(true);
-
-    try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Camera access is not supported by your browser.');
-      }
-
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: mode },
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          }
-        });
-      } catch (e1) {
-        try {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: mode }
-          });
-        } catch (e2) {
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: true
-          });
-        }
-      }
-
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute('playsinline', 'true');
-        await videoRef.current.play();
-      }
-      setIsCameraActive(true);
-      setIsCameraStarting(false);
-      animationFrameIdRef.current = requestAnimationFrame(scanQRCodeLoop);
-    } catch (err: any) {
-      console.warn('Camera stream error, falling back to camera capture:', err);
-      setIsCameraStarting(false);
-      setIsCameraActive(false);
-
-      // Auto-fallback: directly trigger native device camera capture
-      try {
-        if (qrCameraCaptureInputRef.current) {
-          qrCameraCaptureInputRef.current.click();
-          return;
-        }
-      } catch {}
-
-      setCameraError('Camera access was not granted. Tap "Open Camera" to scan.');
-    }
-  };
-
-  const toggleFacingMode = () => {
-    const nextMode = facingMode === 'environment' ? 'user' : 'environment';
-    setFacingMode(nextMode);
-    startCamera(nextMode);
-  };
-
-  const scanQRCodeLoop = () => {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-
-    if (!video || !canvas) {
-      animationFrameIdRef.current = requestAnimationFrame(scanQRCodeLoop);
-      return;
-    }
-
-    if (video.readyState === video.HAVE_ENOUGH_DATA) {
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (ctx) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height, {
-          inversionAttempts: 'attemptBoth'
-        });
-
-        if (code && code.data && code.data.trim()) {
-          const rawScanned = code.data.trim();
-          try {
-            if (navigator.vibrate) navigator.vibrate(100);
-          } catch {}
-          stopCamera();
-          handleScannedQRToken(rawScanned);
-          return;
-        }
-      }
-    }
-
-    animationFrameIdRef.current = requestAnimationFrame(scanQRCodeLoop);
-  };
+  // Clean up centralized camera hardware on unmount
+  useEffect(() => {
+    return () => {
+      centralizedCamera.stopCurrentStream();
+    };
+  }, []);
 
   const handleScannedQRToken = async (rawCode: string) => {
     const token = extractVerificationToken(rawCode);
@@ -263,7 +143,7 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
 
   useEffect(() => {
     return () => {
-      stopCamera();
+      centralizedCamera.stopCurrentStream();
     };
   }, []);
 
@@ -1245,9 +1125,6 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
                 onClick={() => {
                   setQrMode('camera');
                   setQrError(null);
-                  if (!isCameraActive && !isCameraStarting) {
-                    startCamera(facingMode);
-                  }
                 }}
                 className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                   qrMode === 'camera'
@@ -1262,7 +1139,7 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
               <button
                 type="button"
                 onClick={() => {
-                  stopCamera();
+                  centralizedCamera.stopCurrentStream();
                   setQrMode('upload');
                   setQrError(null);
                 }}
@@ -1279,7 +1156,7 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
               <button
                 type="button"
                 onClick={() => {
-                  stopCamera();
+                  centralizedCamera.stopCurrentStream();
                   setQrMode('generate');
                   handleGenerateOfficialQR();
                 }}
@@ -1298,133 +1175,13 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Left Box: Active Mode (Camera Scanner / Upload Box) */}
             <div className="space-y-3">
-              {/* Option 1: Live Camera Scanner */}
+              {/* Option 1: Live Centralized Device Camera Scanner */}
               {qrMode === 'camera' && (
-                <div className="space-y-3">
-                  {isCameraActive ? (
-                    <div className="relative rounded-2xl overflow-hidden bg-slate-950 border border-slate-800 shadow-md">
-                      <video
-                        ref={videoRef}
-                        playsInline
-                        autoPlay
-                        muted
-                        className="w-full h-64 object-cover"
-                      />
-
-                      {/* Viewfinder Target Frame */}
-                      <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-4">
-                        <div className="relative w-48 h-48 rounded-2xl border-2 border-emerald-400/40 shadow-2xl overflow-hidden flex items-center justify-center">
-                          <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-emerald-400 rounded-tl-lg" />
-                          <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-emerald-400 rounded-tr-lg" />
-                          <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-emerald-400 rounded-bl-lg" />
-                          <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-emerald-400 rounded-br-lg" />
-                          <div className="animate-scan-line bg-gradient-to-r from-transparent via-emerald-400 to-transparent h-0.5 w-full absolute shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
-                          <span className="text-[10px] text-emerald-200/90 font-mono tracking-wider uppercase bg-black/50 px-2 py-0.5 rounded backdrop-blur-xs">
-                            Point at Alumni QR
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Camera Controls */}
-                      <div className="absolute top-3 inset-x-3 flex items-center justify-between pointer-events-auto">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-full text-[11px] font-semibold text-emerald-300 border border-emerald-500/30">
-                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                          Camera Scanner Active
-                        </span>
-
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={toggleFacingMode}
-                            className="p-1.5 bg-black/60 hover:bg-black/80 backdrop-blur-md text-white rounded-lg border border-white/20 transition-colors cursor-pointer"
-                            title="Flip camera"
-                          >
-                            <SwitchCamera className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={stopCamera}
-                            className="p-1.5 bg-black/60 hover:bg-black/80 backdrop-blur-md text-white rounded-lg border border-white/20 transition-colors cursor-pointer"
-                            title="Close camera"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Bottom Guidance */}
-                      <div className="absolute bottom-3 inset-x-3 text-center pointer-events-none">
-                        <p className="inline-block text-[11px] text-white/95 bg-black/60 backdrop-blur-md px-3 py-1 rounded-full font-medium shadow-xs">
-                          Align physical card QR inside box to capture automatically
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {/* Hidden native camera capture input */}
-                      <input
-                        type="file"
-                        ref={qrCameraCaptureInputRef}
-                        onChange={handleQRUpload}
-                        accept="image/*"
-                        capture="environment"
-                        className="hidden"
-                        id="admin-qr-camera-capture"
-                      />
-
-                      {cameraError && (
-                        <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2">
-                            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                            <span>{cameraError}</span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => qrCameraCaptureInputRef.current?.click()}
-                            className="px-3 py-1.5 bg-amber-800 hover:bg-amber-900 text-white rounded-lg font-bold text-xs shrink-0 cursor-pointer"
-                          >
-                            Open Camera
-                          </button>
-                        </div>
-                      )}
-
-                      <div className="border-2 border-dashed border-slate-300 bg-slate-50/70 rounded-2xl p-6 sm:p-8 text-center space-y-3">
-                        <div className="p-3.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full shadow-xs inline-flex">
-                          {isCameraStarting ? (
-                            <Loader2 className="w-7 h-7 text-emerald-800 animate-spin" />
-                          ) : (
-                            <Camera className="w-7 h-7" />
-                          )}
-                        </div>
-                        <div className="space-y-1">
-                          <span className="text-sm font-bold text-slate-900 block">
-                            {isCameraStarting ? 'Activating Camera...' : 'Scan Physical Card QR Code'}
-                          </span>
-                          <span className="text-xs text-slate-600 max-w-sm block mx-auto leading-relaxed">
-                            Use your device camera to scan and decode the QR code directly from the alumni card.
-                          </span>
-                        </div>
-                        <div className="pt-1">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (cameraError) {
-                                qrCameraCaptureInputRef.current?.click();
-                              } else {
-                                startCamera(facingMode);
-                              }
-                            }}
-                            disabled={isCameraStarting}
-                            className="w-full sm:w-auto px-5 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-lg text-xs font-bold tracking-wide transition-colors shadow-xs inline-flex items-center justify-center gap-2 cursor-pointer"
-                          >
-                            <Camera className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>{isCameraStarting ? 'Opening Camera...' : 'Open Camera'}</span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                <CentralizedDeviceCamera
+                  onScan={(rawCode) => handleScannedQRToken(rawCode)}
+                  autoStart={true}
+                  instructionText="Align physical card QR inside box to capture automatically"
+                />
               )}
 
               {/* Option 2: Upload QR Image File */}
@@ -1493,9 +1250,6 @@ export const AdminAddAlumni: React.FC<AdminAddAlumniProps> = ({ onSuccess, onCan
                   </button>
                 </div>
               )}
-
-              {/* Hidden canvas for video processing */}
-              <canvas ref={canvasRef} className="hidden" />
 
               {/* Status alerts */}
               {qrError && (
